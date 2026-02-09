@@ -74,7 +74,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useRef } = React;
+        const { useState, useEffect, useCallback } = React;
 
         /* ================================================================
            1. 게임 상수
@@ -211,7 +211,6 @@
             const [isFullscreen, setIsFullscreen] = useState(false);
             const [isMoving, setIsMoving] = useState(false);
             const [moveDirection, setMoveDirection] = useState(0);
-            const lastMoveTimeRef = useRef(0);
 
             // 시간대에 따른 테마 (낮/밤)
             const currentHour = new Date().getHours();
@@ -451,8 +450,8 @@
                                 setIsMoving(false);
                             }
                         }
-                    }, 50);
-                }, 150);
+                    }, 15);
+                }, 100);
 
                 return () => {
                     clearTimeout(longPressTimeout);
@@ -461,10 +460,6 @@
             }, [isMoving, moveDirection, moveHorizontal, currentPiece, gameOver, isPaused, showLevelUp]);
 
             const handleMoveStart = (direction) => {
-                const now = Date.now();
-                if (now - lastMoveTimeRef.current < 100) return;
-                lastMoveTimeRef.current = now;
-
                 setMoveDirection(direction);
                 setIsMoving(true);
                 moveHorizontal(direction);
@@ -642,25 +637,29 @@
                     {/* 방향키 */}
                     <div className="grid grid-cols-3 gap-3 w-72">
                         <button
-                            onPointerDown={(e) => { e.preventDefault(); handleMoveStart(-1); }}
-                            onPointerUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
-                            onPointerLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
-                            onPointerCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onTouchStart={(e) => { e.preventDefault(); handleMoveStart(-1); }}
+                            onTouchEnd={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onTouchCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onMouseDown={(e) => { e.preventDefault(); handleMoveStart(-1); }}
+                            onMouseUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onMouseLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
                             className="control-btn bg-gray-700 active:bg-gray-600 text-white font-bold py-4 rounded-lg text-2xl"
                         >
                             ←
                         </button>
                         <button
-                            onPointerDown={(e) => { e.preventDefault(); rotatePiece(); }}
+                            onTouchStart={(e) => { e.preventDefault(); rotatePiece(); }}
                             className="control-btn bg-blue-600 active:bg-blue-500 text-white font-bold py-4 rounded-lg text-2xl"
                         >
                             ↺
                         </button>
                         <button
-                            onPointerDown={(e) => { e.preventDefault(); handleMoveStart(1); }}
-                            onPointerUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
-                            onPointerLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
-                            onPointerCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onTouchStart={(e) => { e.preventDefault(); handleMoveStart(1); }}
+                            onTouchEnd={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onTouchCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onMouseDown={(e) => { e.preventDefault(); handleMoveStart(1); }}
+                            onMouseUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onMouseLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
                             className="control-btn bg-gray-700 active:bg-gray-600 text-white font-bold py-4 rounded-lg text-2xl"
                         >
                             →
@@ -670,13 +669,13 @@
                     {/* 일시정지 & 드롭 */}
                     <div className="grid grid-cols-3 gap-3 w-72">
                         <button
-                            onPointerDown={(e) => { e.preventDefault(); setIsPaused(prev => !prev); }}
+                            onTouchStart={(e) => { e.preventDefault(); setIsPaused(prev => !prev); }}
                             className="control-btn bg-yellow-600 active:bg-yellow-500 text-white font-bold py-4 rounded-lg text-2xl"
                         >
                             ⏸
                         </button>
                         <button
-                            onPointerDown={(e) => { e.preventDefault(); hardDrop(); }}
+                            onTouchStart={(e) => { e.preventDefault(); hardDrop(); }}
                             className="control-btn bg-red-600 active:bg-red-500 text-white font-bold py-4 rounded-lg col-span-2 text-lg"
                         >
                             DROP
