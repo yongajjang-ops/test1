@@ -438,30 +438,27 @@
             /* ----------------------------------------
                3-8. 연속 이동 처리 (버튼 꾹 누르기)
             ---------------------------------------- */
-            // 끝까지 빠르게 이동 (Drop처럼)
-            const hardMove = useCallback((direction) => {
-                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
-
-                let newX = position.x;
-                while (!checkCollision(currentPiece, { x: newX + direction, y: position.y }, board)) {
-                    newX += direction;
-                }
-                setPosition(prev => ({ ...prev, x: newX }));
-            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
-
             useEffect(() => {
                 if (!isMoving) return;
 
-                // 길게 누르면 끝까지 이동
+                let moveInterval;
                 const longPressTimeout = setTimeout(() => {
-                    hardMove(moveDirection);
-                    setIsMoving(false);
-                }, 300);
+                    moveInterval = setInterval(() => {
+                        if (currentPiece && !gameOver && !isPaused && !showLevelUp) {
+                            const canMove = moveHorizontal(moveDirection);
+                            if (!canMove) {
+                                clearInterval(moveInterval);
+                                setIsMoving(false);
+                            }
+                        }
+                    }, 50);
+                }, 150);
 
                 return () => {
                     clearTimeout(longPressTimeout);
+                    if (moveInterval) clearInterval(moveInterval);
                 };
-            }, [isMoving, moveDirection, hardMove]);
+            }, [isMoving, moveDirection, moveHorizontal, currentPiece, gameOver, isPaused, showLevelUp]);
 
             const handleMoveStart = (direction) => {
                 const now = Date.now();
