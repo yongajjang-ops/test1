@@ -74,7 +74,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
 
         /* ================================================================
            1. 게임 상수
@@ -211,6 +211,7 @@
             const [isFullscreen, setIsFullscreen] = useState(false);
             const [isMoving, setIsMoving] = useState(false);
             const [moveDirection, setMoveDirection] = useState(0);
+            const lastMoveTimeRef = useRef(0);
 
             // 시간대에 따른 테마 (낮/밤)
             const currentHour = new Date().getHours();
@@ -460,6 +461,10 @@
             }, [isMoving, moveDirection, moveHorizontal, currentPiece, gameOver, isPaused, showLevelUp]);
 
             const handleMoveStart = (direction) => {
+                const now = Date.now();
+                if (now - lastMoveTimeRef.current < 100) return; // 100ms 내 중복 호출 방지
+                lastMoveTimeRef.current = now;
+
                 setMoveDirection(direction);
                 setIsMoving(true);
                 moveHorizontal(direction);
