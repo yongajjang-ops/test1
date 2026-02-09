@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>동옥의 AI TETRIS</title>
+
+    <!-- ========== 외부 라이브러리 ========== -->
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Gaegu:wght@700&display=swap" rel="stylesheet">
+
+    <!-- ========== 스타일 ========== -->
+    <style>
+        /* 기본 초기화 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+            position: fixed;
+        }
+
+        #root {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 낙타 걷기 애니메이션 */
+        @keyframes camelWalk {
+            from { transform: translateX(100vw); }
+            to { transform: translateX(-100%); }
+        }
+
+        .animate-camel-walk {
+            animation: camelWalk 30s linear infinite;
+        }
+
+        /* 게임 타이틀 폰트 */
+        .game-title {
+            font-family: 'Gaegu', cursive;
+            font-weight: 700;
+        }
+
+        /* 블록 낙하 애니메이션 (게임오버 시) */
+        @keyframes blockFall {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(20px); opacity: 0.3; }
+        }
+
+        .block-fall {
+            animation: blockFall 0.5s ease-out forwards;
+        }
+
+        /* 컨트롤 버튼 */
+        .control-btn {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        /* ================================================================
+           1. 게임 상수
+        ================================================================ */
+        const BOARD_WIDTH = 10;
+        const BOARD_HEIGHT = 20;
+        const CELL_SIZE = 20;
+
+        const SPEED_OPTIONS = {
+            slow:   { label: '느림', interval: 1500 },
+            normal: { label: '보통', interval: 1000 },
+            fast:   { label: '빠름', interval: 500 }
+        };
+
+        const TETROMINOS = {
+            I: { shape: [[1, 1, 1, 1]], color: 'bg-cyan-500 shadow-lg' },
+            O: { shape: [[1, 1], [1, 1]], color: 'bg-yellow-500 shadow-lg' },
+            T: { shape: [[0, 1, 0], [1, 1, 1]], color: 'bg-purple-500 shadow-lg' },
+            S: { shape: [[0, 1, 1], [1, 1, 0]], color: 'bg-green-500 shadow-lg' },
+            Z: { shape: [[1, 1, 0], [0, 1, 1]], color: 'bg-red-500 shadow-lg' },
+            J: { shape: [[1, 0, 0], [1, 1, 1]], color: 'bg-blue-500 shadow-lg' },
+            L: { shape: [[0, 0, 1], [1, 1, 1]], color: 'bg-orange-500 shadow-lg' }
+        };
+
+        const BLOCK_COLORS = [
+            'bg-cyan-500', 'bg-yellow-500', 'bg-purple-500',
+            'bg-green-500', 'bg-red-500', 'bg-blue-500', 'bg-orange-500'
+        ];
+
+        // 랜덤 보드 생성용 동물 패턴
+        const ANIMAL_PATTERNS = [
+            [[0,1,0,1,0], [1,1,1,1,1], [1,0,1,0,1], [0,1,1,1,0]],           // 토끼
+            [[0,1,0], [1,1,1], [0,1,0], [1,0,1]],                           // 새
+            [[0,1,0], [1,1,1], [1,1,1], [0,1,0]],                           // 물고기
+            [[1,0,1], [1,1,1], [0,1,0], [1,0,1]],                           // 나비
+            [[0,1,0,1,0], [1,1,1,1,1], [1,1,1,1,1], [0,1,1,1,0], [0,0,1,0,0]] // 하트
+        ];
+
+        /* ================================================================
+           2. 유틸리티 함수
+        ================================================================ */
+
+        // 빈 보드 생성
+        const createEmptyBoard = () =>
+            Array.from({ length: BOARD_HEIGHT }, () => Array(BOARD_WIDTH).fill(null));
+
+        // 랜덤 블록이 채워진 보드 생성 (30-50%)
+        const createRandomBoard = () => {
+            const newBoard = createEmptyBoard();
+            const fillHeight = Math.floor(Math.random() * 4) + 6; // 6~9줄
+
+            // 아래부터 랜덤 블록 채우기
+            for (let y = BOARD_HEIGHT - 1; y >= BOARD_HEIGHT - fillHeight; y--) {
+                for (let x = 0; x < BOARD_WIDTH; x++) {
+                    if (Math.random() < 0.6) {
+                        const color = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)];
+                        newBoard[y][x] = color + ' shadow-lg';
+                    }
+                }
+            }
+
+            // 동물 패턴 2~3개 추가
+            const numPatterns = Math.floor(Math.random() * 2) + 2;
+            for (let p = 0; p < numPatterns; p++) {
+                const pattern = ANIMAL_PATTERNS[Math.floor(Math.random() * ANIMAL_PATTERNS.length)];
+                const color = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)] + ' shadow-lg';
+                const startX = Math.floor(Math.random() * (BOARD_WIDTH - pattern[0].length));
+                const startY = BOARD_HEIGHT - fillHeight + Math.floor(Math.random() * Math.min(5, fillHeight - pattern.length));
+
+                for (let py = 0; py < pattern.length && startY + py < BOARD_HEIGHT; py++) {
+                    for (let px = 0; px < pattern[py].length && startX + px < BOARD_WIDTH; px++) {
+                        if (pattern[py][px] === 1) {
+                            newBoard[startY + py][startX + px] = color;
+                        }
+                    }
+                }
+            }
+
+            return newBoard;
+        };
+
+        // 랜덤 테트로미노 생성
+        const getRandomPiece = () => {
+            const pieces = Object.keys(TETROMINOS);
+            const randomPiece = pieces[Math.floor(Math.random() * pieces.length)];
+            return {
+                shape: TETROMINOS[randomPiece].shape,
+                color: TETROMINOS[randomPiece].color
+            };
+        };
+
+        // 반시계 방향 회전
+        const rotateCounterClockwise = (matrix) => {
+            return matrix[0].map((_, i) =>
+                matrix.map(row => row[matrix[0].length - 1 - i])
+            );
+        };
+
+        // 점수 포맷팅
+        const formatScore = (score) => score.toLocaleString();
+
+        /* ================================================================
+           3. 메인 컴포넌트
+        ================================================================ */
+        const Tetris = () => {
+            /* ----------------------------------------
+               3-1. 상태(State) 관리
+            ---------------------------------------- */
+            // 게임 보드 상태
+            const [board, setBoard] = useState(createEmptyBoard());
+            const [currentPiece, setCurrentPiece] = useState(null);
+            const [nextPiece, setNextPiece] = useState(null);
+            const [position, setPosition] = useState({ x: 0, y: 0 });
+
+            // 게임 진행 상태
+            const [gameStarted, setGameStarted] = useState(false);
+            const [gameOver, setGameOver] = useState(false);
+            const [gameOverAnimation, setGameOverAnimation] = useState(false);
+            const [isPaused, setIsPaused] = useState(false);
+            const [showLevelUp, setShowLevelUp] = useState(false);
+
+            // 점수 및 레벨
+            const [score, setScore] = useState(0);
+            const [linesCleared, setLinesCleared] = useState(0);
+            const [level, setLevel] = useState(1);
+            const [speed, setSpeed] = useState('normal');
+            const [currentInterval, setCurrentInterval] = useState(1000);
+
+            // 기록
+            const [scoreHistory, setScoreHistory] = useState([]);
+            const [highScore, setHighScore] = useState({ score: 0, level: 0 });
+
+            // UI 상태
+            const [isFullscreen, setIsFullscreen] = useState(false);
+            const [isMoving, setIsMoving] = useState(false);
+            const [moveDirection, setMoveDirection] = useState(0);
+
+            // 시간대에 따른 테마 (낮/밤)
+            const currentHour = new Date().getHours();
+            const isDaytime = currentHour >= 6 && currentHour < 18;
+
+            /* ----------------------------------------
+               3-2. 전체화면 관리
+            ---------------------------------------- */
+            const toggleFullscreen = async () => {
+                try {
+                    if (!document.fullscreenElement) {
+                        const elem = document.documentElement;
+                        if (elem.requestFullscreen) await elem.requestFullscreen();
+                        else if (elem.webkitRequestFullscreen) await elem.webkitRequestFullscreen();
+                        else if (elem.mozRequestFullScreen) await elem.mozRequestFullScreen();
+                        else if (elem.msRequestFullscreen) await elem.msRequestFullscreen();
+                        setIsFullscreen(true);
+                    } else {
+                        if (document.exitFullscreen) await document.exitFullscreen();
+                        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+                        else if (document.mozCancelFullScreen) await document.mozCancelFullScreen();
+                        else if (document.msExitFullscreen) await document.msExitFullscreen();
+                        setIsFullscreen(false);
+                    }
+                } catch (err) {
+                    console.log('전체화면 전환 중 오류:', err);
+                    setIsFullscreen(!!document.fullscreenElement);
+                }
+            };
+
+            useEffect(() => {
+                const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+                document.addEventListener('fullscreenchange', handleFullscreenChange);
+                return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            }, []);
+
+            /* ----------------------------------------
+               3-3. 게임 로직 - 충돌 감지
+            ---------------------------------------- */
+            const checkCollision = useCallback((piece, pos, currentBoard) => {
+                for (let y = 0; y < piece.shape.length; y++) {
+                    for (let x = 0; x < piece.shape[y].length; x++) {
+                        if (piece.shape[y][x]) {
+                            const newY = pos.y + y;
+                            const newX = pos.x + x;
+
+                            // 경계 체크
+                            if (newX < 0 || newX >= BOARD_WIDTH || newY >= BOARD_HEIGHT) {
+                                return true;
+                            }
+                            // 다른 블록과 충돌 체크
+                            if (newY >= 0 && currentBoard[newY][newX]) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }, []);
+
+            /* ----------------------------------------
+               3-4. 게임 로직 - 블록 병합 및 라인 제거
+            ---------------------------------------- */
+            const mergePieceToBoard = useCallback(() => {
+                const newBoard = board.map(row => [...row]);
+
+                currentPiece.shape.forEach((row, y) => {
+                    row.forEach((cell, x) => {
+                        if (cell) {
+                            const boardY = position.y + y;
+                            const boardX = position.x + x;
+                            if (boardY >= 0 && boardY < BOARD_HEIGHT) {
+                                newBoard[boardY][boardX] = currentPiece.color;
+                            }
+                        }
+                    });
+                });
+
+                return newBoard;
+            }, [board, currentPiece, position]);
+
+            const clearLines = useCallback((currentBoard) => {
+                let linesClearedCount = 0;
+                const newBoard = currentBoard.filter(row => {
+                    if (row.every(cell => cell !== null)) {
+                        linesClearedCount++;
+                        return false;
+                    }
+                    return true;
+                });
+
+                while (newBoard.length < BOARD_HEIGHT) {
+                    newBoard.unshift(Array(BOARD_WIDTH).fill(null));
+                }
+
+                return { newBoard, linesCleared: linesClearedCount };
+            }, []);
+
+            /* ----------------------------------------
+               3-5. 게임 로직 - 새 블록 생성
+            ---------------------------------------- */
+            const spawnNewPiece = useCallback(() => {
+                const newPiece = nextPiece || getRandomPiece();
+                const startX = Math.floor(BOARD_WIDTH / 2) - Math.floor(newPiece.shape[0].length / 2);
+                const startPos = { x: startX, y: 0 };
+
+                // 게임 오버 체크
+                if (checkCollision(newPiece, startPos, board)) {
+                    setGameOver(true);
+                    setGameOverAnimation(true);
+
+                    // 기록 저장
+                    setScoreHistory(prev => [...prev, { score, level }].slice(-5));
+                    setHighScore(prev => score > prev.score ? { score, level } : prev);
+                    return;
+                }
+
+                setCurrentPiece(newPiece);
+                setNextPiece(getRandomPiece());
+                setPosition(startPos);
+            }, [board, checkCollision, nextPiece, score, level]);
+
+            /* ----------------------------------------
+               3-6. 게임 로직 - 블록 이동
+            ---------------------------------------- */
+            // 라인 클리어 후 레벨업 체크
+            const handleLinesCleared = useCallback((linesClearedCount) => {
+                setScore(prev => prev + linesClearedCount * 100);
+                setLinesCleared(prev => {
+                    const newTotal = prev + linesClearedCount;
+                    if (newTotal >= 20 && newTotal % 20 < linesClearedCount) {
+                        setShowLevelUp(true);
+                        setIsPaused(true);
+                    }
+                    return newTotal;
+                });
+            }, []);
+
+            // 아래로 이동
+            const moveDown = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+
+                const newPos = { ...position, y: position.y + 1 };
+
+                if (checkCollision(currentPiece, newPos, board)) {
+                    const mergedBoard = mergePieceToBoard();
+                    const { newBoard, linesCleared: linesClearedCount } = clearLines(mergedBoard);
+
+                    setBoard(newBoard);
+                    handleLinesCleared(linesClearedCount);
+                    spawnNewPiece();
+                } else {
+                    setPosition(newPos);
+                }
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp,
+                checkCollision, mergePieceToBoard, clearLines, handleLinesCleared, spawnNewPiece]);
+
+            // 좌우 이동
+            const moveHorizontal = useCallback((direction) => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return false;
+
+                const newPos = { ...position, x: position.x + direction };
+
+                if (!checkCollision(currentPiece, newPos, board)) {
+                    setPosition(newPos);
+                    return true;
+                }
+                return false;
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
+
+            // 회전
+            const rotatePiece = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+
+                const rotated = { ...currentPiece, shape: rotateCounterClockwise(currentPiece.shape) };
+
+                if (!checkCollision(rotated, position, board)) {
+                    setCurrentPiece(rotated);
+                }
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
+
+            // 하드 드롭 (즉시 떨어뜨리기)
+            const hardDrop = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+
+                let newPos = { ...position };
+                while (!checkCollision(currentPiece, { ...newPos, y: newPos.y + 1 }, board)) {
+                    newPos.y++;
+                }
+
+                const newBoard = board.map(row => [...row]);
+
+                currentPiece.shape.forEach((row, y) => {
+                    row.forEach((cell, x) => {
+                        if (cell) {
+                            const boardY = newPos.y + y;
+                            const boardX = newPos.x + x;
+                            if (boardY >= 0 && boardY < BOARD_HEIGHT) {
+                                newBoard[boardY][boardX] = currentPiece.color;
+                            }
+                        }
+                    });
+                });
+
+                const { newBoard: clearedBoard, linesCleared: linesClearedCount } = clearLines(newBoard);
+
+                setBoard(clearedBoard);
+                setScore(prev => prev + linesClearedCount * 100 + 10);
+                handleLinesCleared(linesClearedCount);
+                spawnNewPiece();
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp,
+                checkCollision, clearLines, handleLinesCleared, spawnNewPiece]);
+
+            /* ----------------------------------------
+               3-7. 게임 루프 (자동 하강)
+            ---------------------------------------- */
+            useEffect(() => {
+                if (!gameStarted || gameOver || isPaused || showLevelUp) return;
+
+                const interval = setInterval(moveDown, currentInterval);
+                return () => clearInterval(interval);
+            }, [moveDown, gameOver, isPaused, gameStarted, showLevelUp, currentInterval]);
+
+            /* ----------------------------------------
+               3-8. 연속 이동 처리 (버튼 꾹 누르기)
+            ---------------------------------------- */
+            useEffect(() => {
+                if (!isMoving) return;
+
+                let moveInterval;
+                const longPressTimeout = setTimeout(() => {
+                    moveInterval = setInterval(() => {
+                        if (currentPiece && !gameOver && !isPaused && !showLevelUp) {
+                            const canMove = moveHorizontal(moveDirection);
+                            if (!canMove) {
+                                clearInterval(moveInterval);
+                                setIsMoving(false);
+                            }
+                        }
+                    }, 15);
+                }, 100);
+
+                return () => {
+                    clearTimeout(longPressTimeout);
+                    if (moveInterval) clearInterval(moveInterval);
+                };
+            }, [isMoving, moveDirection, moveHorizontal, currentPiece, gameOver, isPaused, showLevelUp]);
+
+            const handleMoveStart = (direction) => {
+                setMoveDirection(direction);
+                setIsMoving(true);
+                moveHorizontal(direction);
+            };
+
+            const handleMoveEnd = () => {
+                setIsMoving(false);
+                setMoveDirection(0);
+            };
+
+            /* ----------------------------------------
+               3-9. 게임 시작/종료 함수
+            ---------------------------------------- */
+            const initGame = (initialBoard) => {
+                setBoard(initialBoard);
+                setScore(0);
+                setLinesCleared(0);
+                setLevel(1);
+                setGameOver(false);
+                setGameOverAnimation(false);
+                setIsPaused(false);
+                setShowLevelUp(false);
+                setGameStarted(true);
+                setCurrentInterval(SPEED_OPTIONS[speed].interval);
+
+                const newPiece = getRandomPiece();
+                setCurrentPiece(newPiece);
+                setNextPiece(getRandomPiece());
+                setPosition({
+                    x: Math.floor(BOARD_WIDTH / 2) - Math.floor(newPiece.shape[0].length / 2),
+                    y: 0
+                });
+            };
+
+            const startGame = () => initGame(createEmptyBoard());
+            const startRandomGame = () => initGame(createRandomBoard());
+
+            const resetGame = () => {
+                setBoard(createEmptyBoard());
+                setCurrentPiece(null);
+                setNextPiece(null);
+                setPosition({ x: 0, y: 0 });
+                setScore(0);
+                setLinesCleared(0);
+                setLevel(1);
+                setGameOver(false);
+                setGameOverAnimation(false);
+                setIsPaused(false);
+                setShowLevelUp(false);
+                setGameStarted(false);
+                setCurrentInterval(SPEED_OPTIONS[speed].interval);
+            };
+
+            const continueGame = () => {
+                setShowLevelUp(false);
+                setIsPaused(false);
+            };
+
+            const increaseSpeed = () => {
+                setCurrentInterval(prev => Math.max(100, Math.round(prev * 0.8)));
+                setLevel(prev => prev + 1);
+                setShowLevelUp(false);
+                setIsPaused(false);
+            };
+
+            /* ----------------------------------------
+               3-10. 렌더링 - 보드
+            ---------------------------------------- */
+            const renderBoard = () => {
+                const displayBoard = board.map(row => [...row]);
+
+                if (currentPiece && !gameOver) {
+                    currentPiece.shape.forEach((row, y) => {
+                        row.forEach((cell, x) => {
+                            if (cell) {
+                                const boardY = position.y + y;
+                                const boardX = position.x + x;
+                                if (boardY >= 0 && boardY < BOARD_HEIGHT && boardX >= 0 && boardX < BOARD_WIDTH) {
+                                    displayBoard[boardY][boardX] = currentPiece.color;
+                                }
+                            }
+                        });
+                    });
+                }
+
+                return displayBoard;
+            };
+
+            /* ----------------------------------------
+               3-11. 렌더링 - 테마 색상
+            ---------------------------------------- */
+            const bgGradient = isDaytime
+                ? 'from-yellow-300 via-orange-200 to-yellow-400'
+                : 'from-indigo-900 via-purple-900 to-blue-900';
+
+            const sandColor1 = isDaytime ? 'from-yellow-600 to-yellow-400' : 'from-gray-700 to-gray-600';
+            const sandColor2 = isDaytime ? 'from-yellow-500 to-yellow-300' : 'from-gray-600 to-gray-500';
+            const sandColor3 = isDaytime ? 'from-orange-600 to-orange-400' : 'from-gray-800 to-gray-700';
+
+            /* ----------------------------------------
+               3-12. 렌더링 - UI 컴포넌트
+            ---------------------------------------- */
+            // 다음 블록 미리보기
+            const NextPiecePreview = () => (
+                nextPiece && (
+                    <div className="flex flex-col items-center">
+                        <div
+                            className="border-2 border-gray-700 bg-gray-800 p-1.5 rounded-lg"
+                            style={{
+                                display: 'grid',
+                                gridTemplateColumns: `repeat(4, ${CELL_SIZE}px)`,
+                                gap: '2px'
+                            }}
+                        >
+                            {Array.from({ length: 4 }).map((_, y) =>
+                                Array.from({ length: 4 }).map((_, x) => {
+                                    const pieceY = y - Math.floor((4 - nextPiece.shape.length) / 2);
+                                    const pieceX = x - Math.floor((4 - nextPiece.shape[0].length) / 2);
+                                    const isActive =
+                                        pieceY >= 0 && pieceY < nextPiece.shape.length &&
+                                        pieceX >= 0 && pieceX < nextPiece.shape[0].length &&
+                                        nextPiece.shape[pieceY][pieceX];
+
+                                    return (
+                                        <div
+                                            key={`${y}-${x}`}
+                                            className={`${isActive ? nextPiece.color : 'bg-gray-900'} rounded`}
+                                            style={{ width: CELL_SIZE, height: CELL_SIZE }}
+                                        />
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                )
+            );
+
+            // 레벨 표시
+            const LevelDisplay = () => (
+                <div className="flex flex-col items-center bg-gray-800 bg-opacity-80 p-2 rounded-lg">
+                    <div className="text-sm font-semibold text-yellow-400">LEVEL</div>
+                    <div className="text-xl font-bold text-white">{level}</div>
+                </div>
+            );
+
+            // 점수 기록
+            const ScoreHistory = () => (
+                scoreHistory.length > 0 && (
+                    <div className="flex flex-col items-center bg-gray-800 bg-opacity-90 p-2 rounded-lg">
+                        <div className="text-xs font-semibold text-gray-400 mb-1">기록</div>
+                        {scoreHistory.map((record, index) => (
+                            <div key={index} className="text-xs text-white">
+                                Lv.{record.level} : {formatScore(record.score)}
+                            </div>
+                        ))}
+                    </div>
+                )
+            );
+
+            // 최고 점수
+            const HighScoreDisplay = () => (
+                highScore.score > 0 && (
+                    <div className="flex flex-col items-center bg-gradient-to-r from-yellow-600 to-orange-600 p-2 rounded-lg">
+                        <div className="text-xs font-semibold text-white">최고기록</div>
+                        <div className="text-base font-bold text-white">
+                            Lv.{highScore.level} : {formatScore(highScore.score)}
+                        </div>
+                    </div>
+                )
+            );
+
+            // 게임 컨트롤 버튼
+            const GameControls = () => (
+                <div className="mt-6 flex flex-col gap-8 items-center relative z-50">
+                    {/* 방향키 */}
+                    <div className="grid grid-cols-3 gap-3 w-72">
+                        <button
+                            onPointerDown={(e) => { e.preventDefault(); handleMoveStart(-1); }}
+                            onPointerUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onPointerLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onPointerCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            className="control-btn bg-gray-700 active:bg-gray-600 text-white font-bold py-4 rounded-lg text-2xl"
+                        >
+                            ←
+                        </button>
+                        <button
+                            onPointerDown={(e) => { e.preventDefault(); rotatePiece(); }}
+                            className="control-btn bg-blue-600 active:bg-blue-500 text-white font-bold py-4 rounded-lg text-2xl"
+                        >
+                            ↺
+                        </button>
+                        <button
+                            onPointerDown={(e) => { e.preventDefault(); handleMoveStart(1); }}
+                            onPointerUp={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onPointerLeave={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            onPointerCancel={(e) => { e.preventDefault(); handleMoveEnd(); }}
+                            className="control-btn bg-gray-700 active:bg-gray-600 text-white font-bold py-4 rounded-lg text-2xl"
+                        >
+                            →
+                        </button>
+                    </div>
+
+                    {/* 일시정지 & 드롭 */}
+                    <div className="grid grid-cols-3 gap-3 w-72">
+                        <button
+                            onPointerDown={(e) => { e.preventDefault(); setIsPaused(prev => !prev); }}
+                            className="control-btn bg-yellow-600 active:bg-yellow-500 text-white font-bold py-4 rounded-lg text-2xl"
+                        >
+                            ⏸
+                        </button>
+                        <button
+                            onPointerDown={(e) => { e.preventDefault(); hardDrop(); }}
+                            className="control-btn bg-red-600 active:bg-red-500 text-white font-bold py-4 rounded-lg col-span-2 text-lg"
+                        >
+                            DROP
+                        </button>
+                    </div>
+                </div>
+            );
+
+            // 낙타 애니메이션
+            const CamelAnimation = () => (
+                <div className="absolute bottom-12 left-0 right-0 h-16 overflow-hidden z-10">
+                    <div className="animate-camel-walk flex gap-32">
+                        {[...Array(6)].map((_, i) => (
+                            <div key={i} className="flex flex-col items-center min-w-max">
+                                <div className="relative">
+                                    <div className="w-20 h-12 bg-amber-700 rounded-full"></div>
+                                    <div className="absolute top-0 left-1/3 -translate-x-1/2 -translate-y-2 w-9 h-9 bg-amber-800 rounded-full"></div>
+                                    <div className="absolute top-0 right-1/3 translate-x-1/2 -translate-y-2 w-9 h-9 bg-amber-800 rounded-full"></div>
+                                    <div className="absolute -top-3 -left-2 w-3 h-12 bg-amber-700 rounded"></div>
+                                    <div className="absolute -top-6 -left-4 w-7 h-6 bg-amber-700 rounded-lg"></div>
+                                    <div className="absolute -top-7 -left-5 w-2 h-3 bg-amber-800 rounded-full"></div>
+                                    <div className="absolute -top-7 -left-2 w-2 h-3 bg-amber-800 rounded-full"></div>
+                                    <div className="absolute top-1 right-0 w-2 h-8 bg-amber-800 rounded"></div>
+                                    <div className="absolute bottom-0 left-3 w-2 h-8 bg-amber-900"></div>
+                                    <div className="absolute bottom-0 left-8 w-2 h-8 bg-amber-900"></div>
+                                    <div className="absolute bottom-0 right-8 w-2 h-8 bg-amber-900"></div>
+                                    <div className="absolute bottom-0 right-3 w-2 h-8 bg-amber-900"></div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            /* ----------------------------------------
+               3-13. 메인 렌더링
+            ---------------------------------------- */
+            return (
+                <div className={`relative flex flex-col ${!gameStarted ? 'items-center justify-center' : 'items-center justify-between'} min-h-screen bg-gradient-to-b ${bgGradient} text-white overflow-hidden`}>
+
+                    {/* 배경: 태양/달 */}
+                    {isDaytime ? (
+                        <div className="absolute top-5 right-10 w-16 h-16 bg-yellow-400 rounded-full opacity-80 shadow-2xl"></div>
+                    ) : (
+                        <div className="absolute top-5 right-10 w-16 h-16 bg-gray-300 rounded-full opacity-70 shadow-2xl">
+                            <div className="absolute top-1 right-1 w-14 h-14 bg-indigo-900 rounded-full"></div>
+                        </div>
+                    )}
+
+                    {/* 배경: 사막 언덕 */}
+                    <div className={`absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t ${sandColor1} rounded-t-full transform scale-x-150`}></div>
+                    <div className={`absolute bottom-0 left-1/4 right-0 h-32 bg-gradient-to-t ${sandColor2} rounded-t-full transform scale-x-125 opacity-70`}></div>
+                    <div className={`absolute bottom-0 left-0 right-1/3 h-36 bg-gradient-to-t ${sandColor3} rounded-t-full opacity-60`}></div>
+
+                    {/* 배경: 걷는 낙타 */}
+                    <CamelAnimation />
+
+                    {/* 메인 콘텐츠 */}
+                    <div className="relative z-10 w-full flex flex-col items-center pt-2">
+
+                        {/* 타이틀 */}
+                        <h1 className="game-title text-3xl font-bold mb-2 text-amber-900 drop-shadow-lg text-center">
+                            동옥의 AI TETRIS
+                        </h1>
+
+                        {/* 게임 중 상단 정보 */}
+                        {gameStarted && (
+                            <div className="mb-2 flex gap-4 items-center text-base">
+                                <div className="text-amber-900 font-bold drop-shadow">점수: {formatScore(score)}</div>
+                                <div className="text-orange-800 font-bold drop-shadow">줄: {linesCleared}</div>
+                                <button
+                                    onClick={toggleFullscreen}
+                                    className="px-2 py-1 bg-gray-700 active:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1"
+                                >
+                                    {isFullscreen ? '🔽' : '🔼'}
+                                    <span className="text-xs">전체화면</span>
+                                </button>
+                            </div>
+                        )}
+
+                        {/* 시작 화면 */}
+                        {!gameStarted && (
+                            <div className="mb-2 flex flex-col items-center gap-2 px-4">
+                                {/* 속도 선택 */}
+                                <div className="flex gap-2">
+                                    {Object.entries(SPEED_OPTIONS).map(([key, { label }]) => (
+                                        <button
+                                            key={key}
+                                            onClick={() => setSpeed(key)}
+                                            className={`px-3 py-1 rounded-lg font-semibold text-xs ${
+                                                speed === key ? 'bg-green-600 active:bg-green-700' : 'bg-gray-600 active:bg-gray-700'
+                                            }`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* 게임 시작 버튼 */}
+                                <div className="flex gap-2">
+                                    <button onClick={startGame} className="px-4 py-2 bg-blue-600 active:bg-blue-700 rounded-lg text-base font-semibold">
+                                        게임 시작
+                                    </button>
+                                    <button onClick={startRandomGame} className="px-4 py-2 bg-purple-600 active:bg-purple-700 rounded-lg text-base font-semibold">
+                                        🎲 랜덤
+                                    </button>
+                                    <button onClick={toggleFullscreen} className="px-3 py-2 bg-gray-700 active:bg-gray-600 rounded-lg text-base font-semibold">
+                                        {isFullscreen ? '전체화면 해제' : '전체화면'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 게임 플레이 영역 */}
+                        {gameStarted && (
+                            <>
+                                {/* 레벨업 팝업 */}
+                                {showLevelUp && (
+                                    <div className="mb-2 bg-orange-800 border-2 border-yellow-500 rounded-lg p-4 mx-4 shadow-2xl">
+                                        <div className="text-xl text-yellow-300 mb-3 font-bold text-center">🎉 20줄 달성!</div>
+                                        <div className="text-base mb-3 text-center">레벨을 올리시겠습니까?</div>
+                                        <div className="flex gap-2 justify-center">
+                                            <button onClick={continueGame} className="px-4 py-2 bg-blue-600 active:bg-blue-700 rounded-lg font-semibold text-sm">
+                                                같은 속도
+                                            </button>
+                                            <button onClick={increaseSpeed} className="px-4 py-2 bg-green-600 active:bg-green-700 rounded-lg font-semibold text-sm">
+                                                레벨 {level + 1}로 ↑
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* 게임 보드 + 사이드 패널 */}
+                                <div className="flex gap-3 items-start justify-center">
+                                    {/* 사이드 패널 */}
+                                    <div className="flex flex-col gap-2">
+                                        <NextPiecePreview />
+                                        <LevelDisplay />
+                                        <ScoreHistory />
+                                        <HighScoreDisplay />
+                                    </div>
+
+                                    {/* 게임 보드 */}
+                                    <div className="relative">
+                                        <div
+                                            className="border-4 border-gray-700 bg-gray-800 rounded-lg"
+                                            style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: `repeat(${BOARD_WIDTH}, ${CELL_SIZE}px)`,
+                                                gap: '2px',
+                                                padding: '2px'
+                                            }}
+                                        >
+                                            {renderBoard().map((row, y) =>
+                                                row.map((cell, x) => (
+                                                    <div
+                                                        key={`${y}-${x}`}
+                                                        className={`${cell || 'bg-gray-900'} ${gameOverAnimation ? 'block-fall' : ''} rounded-md`}
+                                                        style={{
+                                                            width: CELL_SIZE,
+                                                            height: CELL_SIZE,
+                                                            animationDelay: gameOverAnimation ? `${y * 0.05}s` : '0s'
+                                                        }}
+                                                    />
+                                                ))
+                                            )}
+                                        </div>
+
+                                        {/* 게임 오버 오버레이 */}
+                                        {gameOver && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                                                <div className="text-3xl font-bold text-red-600 bg-black bg-opacity-70 px-5 py-3 rounded-lg">
+                                                    GAME OVER
+                                                </div>
+                                                <div className="flex gap-3">
+                                                    <button onClick={startGame} className="px-5 py-4 bg-blue-600 active:bg-blue-700 rounded-lg text-sm font-bold whitespace-pre-line leading-tight min-w-[70px]">
+                                                        {'다시\n시작'}
+                                                    </button>
+                                                    <button onClick={startRandomGame} className="px-5 py-4 bg-purple-600 active:bg-purple-700 rounded-lg text-sm font-bold whitespace-pre-line leading-tight min-w-[70px]">
+                                                        {'랜덤\n시작'}
+                                                    </button>
+                                                    <button onClick={resetGame} className="px-5 py-4 bg-gray-600 active:bg-gray-700 rounded-lg text-sm font-bold whitespace-pre-line leading-tight min-w-[70px]">
+                                                        {'메인\n으로'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* 컨트롤 버튼 */}
+                                {!gameOver && !showLevelUp && <GameControls />}
+                            </>
+                        )}
+                    </div>
+
+                    {/* 푸터 */}
+                    <div className="absolute bottom-2 right-2 text-xs text-amber-900 bg-yellow-100 bg-opacity-70 px-2 py-0.5 rounded z-10 text-right leading-tight pointer-events-none">
+                        <div>이동옥 2026.01.12</div>
+                        <div className="text-xs">with claude.ai</div>
+                    </div>
+                </div>
+            );
+        };
+
+        /* ================================================================
+           4. 앱 렌더링
+        ================================================================ */
+        ReactDOM.render(<Tetris />, document.getElementById('root'));
+    </script>
+</body>
+</html>
