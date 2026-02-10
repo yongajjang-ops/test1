@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>동옥의 AI TETRIS (PC)</title>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Gaegu:wght@700&display=swap" rel="stylesheet">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        #root { width: 100%; height: 100%; }
+        @keyframes camelWalk {
+            from { transform: translateX(100vw); }
+            to { transform: translateX(-100%); }
+        }
+        .animate-camel-walk { animation: camelWalk 30s linear infinite; }
+        .game-title { font-family: 'Gaegu', cursive; font-weight: 700; }
+        @keyframes blockFall {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(20px); opacity: 0.3; }
+        }
+        .block-fall { animation: blockFall 0.5s ease-out forwards; }
+        .key-hint {
+            display: inline-block;
+            background: #374151;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin: 0 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // 게임 상수
+        const BOARD_WIDTH = 10;
+        const BOARD_HEIGHT = 20;
+        const CELL_SIZE = 24;
+        const KEY_REPEAT_DELAY = 150;
+        const KEY_REPEAT_INTERVAL = 50;
+
+        const SPEED_OPTIONS = {
+            slow: { label: '느림', interval: 1500 },
+            normal: { label: '보통', interval: 1000 },
+            fast: { label: '빠름', interval: 500 }
+        };
+
+        const TETROMINOS = {
+            I: { shape: [[1, 1, 1, 1]], color: 'bg-cyan-500 shadow-lg' },
+            O: { shape: [[1, 1], [1, 1]], color: 'bg-yellow-500 shadow-lg' },
+            T: { shape: [[0, 1, 0], [1, 1, 1]], color: 'bg-purple-500 shadow-lg' },
+            S: { shape: [[0, 1, 1], [1, 1, 0]], color: 'bg-green-500 shadow-lg' },
+            Z: { shape: [[1, 1, 0], [0, 1, 1]], color: 'bg-red-500 shadow-lg' },
+            J: { shape: [[1, 0, 0], [1, 1, 1]], color: 'bg-blue-500 shadow-lg' },
+            L: { shape: [[0, 0, 1], [1, 1, 1]], color: 'bg-orange-500 shadow-lg' }
+        };
+
+        const BLOCK_COLORS = [
+            'bg-cyan-500', 'bg-yellow-500', 'bg-purple-500',
+            'bg-green-500', 'bg-red-500', 'bg-blue-500', 'bg-orange-500'
+        ];
+
+        const ANIMAL_PATTERNS = [
+            [[0,1,0,1,0], [1,1,1,1,1], [1,0,1,0,1], [0,1,1,1,0]],
+            [[0,1,0], [1,1,1], [0,1,0], [1,0,1]],
+            [[0,1,0], [1,1,1], [1,1,1], [0,1,0]],
+            [[1,0,1], [1,1,1], [0,1,0], [1,0,1]],
+            [[0,1,0,1,0], [1,1,1,1,1], [1,1,1,1,1], [0,1,1,1,0], [0,0,1,0,0]]
+        ];
+
+        // 유틸리티 함수
+        const createEmptyBoard = () =>
+            Array.from({ length: BOARD_HEIGHT }, () => Array(BOARD_WIDTH).fill(null));
+
+        const createRandomBoard = () => {
+            const newBoard = createEmptyBoard();
+            const fillHeight = Math.floor(Math.random() * 4) + 6;
+
+            for (let y = BOARD_HEIGHT - 1; y >= BOARD_HEIGHT - fillHeight; y--) {
+                for (let x = 0; x < BOARD_WIDTH; x++) {
+                    if (Math.random() < 0.6) {
+                        newBoard[y][x] = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)] + ' shadow-lg';
+                    }
+                }
+            }
+
+            const numPatterns = Math.floor(Math.random() * 2) + 2;
+            for (let p = 0; p < numPatterns; p++) {
+                const pattern = ANIMAL_PATTERNS[Math.floor(Math.random() * ANIMAL_PATTERNS.length)];
+                const color = BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)] + ' shadow-lg';
+                const startX = Math.floor(Math.random() * (BOARD_WIDTH - pattern[0].length));
+                const startY = BOARD_HEIGHT - fillHeight + Math.floor(Math.random() * Math.min(5, fillHeight - pattern.length));
+
+                for (let py = 0; py < pattern.length && startY + py < BOARD_HEIGHT; py++) {
+                    for (let px = 0; px < pattern[py].length && startX + px < BOARD_WIDTH; px++) {
+                        if (pattern[py][px] === 1) {
+                            newBoard[startY + py][startX + px] = color;
+                        }
+                    }
+                }
+            }
+
+            return newBoard;
+        };
+
+        const getRandomPiece = () => {
+            const pieces = Object.keys(TETROMINOS);
+            const key = pieces[Math.floor(Math.random() * pieces.length)];
+            return { shape: TETROMINOS[key].shape, color: TETROMINOS[key].color };
+        };
+
+        const rotate = (matrix) => matrix[0].map((_, i) => matrix.map(row => row[i]).reverse());
+
+        const rotateCounterClockwise = (matrix) =>
+            matrix[0].map((_, i) => matrix.map(row => row[matrix[0].length - 1 - i]));
+
+        const formatScore = (score) => score.toLocaleString();
+
+        // 메인 컴포넌트
+        const Tetris = () => {
+            const [board, setBoard] = useState(createEmptyBoard());
+            const [currentPiece, setCurrentPiece] = useState(null);
+            const [nextPiece, setNextPiece] = useState(null);
+            const [position, setPosition] = useState({ x: 0, y: 0 });
+            const [gameOver, setGameOver] = useState(false);
+            const [score, setScore] = useState(0);
+            const [isPaused, setIsPaused] = useState(false);
+            const [gameStarted, setGameStarted] = useState(false);
+            const [speed, setSpeed] = useState('normal');
+            const [linesCleared, setLinesCleared] = useState(0);
+            const [showLevelUp, setShowLevelUp] = useState(false);
+            const [currentInterval, setCurrentInterval] = useState(1000);
+            const [gameOverAnimation, setGameOverAnimation] = useState(false);
+            const [level, setLevel] = useState(1);
+            const [scoreHistory, setScoreHistory] = useState([]);
+            const [highScore, setHighScore] = useState({ score: 0, level: 0 });
+            const [isFullscreen, setIsFullscreen] = useState(false);
+
+            // 키보드 연속 입력을 위한 ref
+            const keyRepeatRef = useRef({});
+
+            // 최신 상태를 참조하기 위한 ref
+            const currentPieceRef = useRef(currentPiece);
+            const boardRef = useRef(board);
+            const positionRef = useRef(position);
+            const gameStateRef = useRef({ gameOver, isPaused, showLevelUp });
+
+            useEffect(() => { currentPieceRef.current = currentPiece; }, [currentPiece]);
+            useEffect(() => { boardRef.current = board; }, [board]);
+            useEffect(() => { positionRef.current = position; }, [position]);
+            useEffect(() => { gameStateRef.current = { gameOver, isPaused, showLevelUp }; }, [gameOver, isPaused, showLevelUp]);
+
+            // 함수 ref (최신 함수를 항상 참조)
+            const moveHorizontalRef = useRef();
+            const rotatePieceRef = useRef();
+            const rotatePieceCounterClockwiseRef = useRef();
+            const hardDropRef = useRef();
+
+            const currentHour = new Date().getHours();
+            const isDaytime = currentHour >= 6 && currentHour < 18;
+
+            // 전체화면 관련
+            const toggleFullscreen = async () => {
+                try {
+                    if (!document.fullscreenElement) {
+                        const elem = document.documentElement;
+                        await (elem.requestFullscreen?.() || elem.webkitRequestFullscreen?.() ||
+                               elem.mozRequestFullScreen?.() || elem.msRequestFullscreen?.());
+                        setIsFullscreen(true);
+                    } else {
+                        await (document.exitFullscreen?.() || document.webkitExitFullscreen?.() ||
+                               document.mozCancelFullScreen?.() || document.msExitFullscreen?.());
+                        setIsFullscreen(false);
+                    }
+                } catch (err) {
+                    console.log('전체화면 전환 중 오류:', err);
+                    setIsFullscreen(!!document.fullscreenElement);
+                }
+            };
+
+            useEffect(() => {
+                const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+                document.addEventListener('fullscreenchange', handleFullscreenChange);
+                return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            }, []);
+
+            // 게임 로직
+            const checkCollision = useCallback((piece, pos, currentBoard) => {
+                for (let y = 0; y < piece.shape.length; y++) {
+                    for (let x = 0; x < piece.shape[y].length; x++) {
+                        if (piece.shape[y][x]) {
+                            const newY = pos.y + y;
+                            const newX = pos.x + x;
+                            if (newX < 0 || newX >= BOARD_WIDTH || newY >= BOARD_HEIGHT) return true;
+                            if (newY >= 0 && currentBoard[newY][newX]) return true;
+                        }
+                    }
+                }
+                return false;
+            }, []);
+
+            const mergePieceToBoard = useCallback(() => {
+                const newBoard = board.map(row => [...row]);
+                currentPiece.shape.forEach((row, y) => {
+                    row.forEach((cell, x) => {
+                        if (cell) {
+                            const boardY = position.y + y;
+                            const boardX = position.x + x;
+                            if (boardY >= 0 && boardY < BOARD_HEIGHT) {
+                                newBoard[boardY][boardX] = currentPiece.color;
+                            }
+                        }
+                    });
+                });
+                return newBoard;
+            }, [board, currentPiece, position]);
+
+            const clearLines = useCallback((currentBoard) => {
+                let linesClearedCount = 0;
+                const newBoard = currentBoard.filter(row => {
+                    if (row.every(cell => cell !== null)) {
+                        linesClearedCount++;
+                        return false;
+                    }
+                    return true;
+                });
+                while (newBoard.length < BOARD_HEIGHT) {
+                    newBoard.unshift(Array(BOARD_WIDTH).fill(null));
+                }
+                return { newBoard, linesCleared: linesClearedCount };
+            }, []);
+
+            const handleLinesCleared = useCallback((linesClearedCount) => {
+                setScore(prev => prev + linesClearedCount * 100);
+                setLinesCleared(prev => {
+                    const newTotal = prev + linesClearedCount;
+                    if (newTotal >= 20 && newTotal % 20 < linesClearedCount) {
+                        setShowLevelUp(true);
+                        setIsPaused(true);
+                    }
+                    return newTotal;
+                });
+            }, []);
+
+            const spawnNewPiece = useCallback(() => {
+                const newPiece = nextPiece || getRandomPiece();
+                const startX = Math.floor(BOARD_WIDTH / 2) - Math.floor(newPiece.shape[0].length / 2);
+                const startPos = { x: startX, y: 0 };
+
+                if (checkCollision(newPiece, startPos, board)) {
+                    setGameOver(true);
+                    setGameOverAnimation(true);
+                    setScoreHistory(prev => [...prev, { score, level }].slice(-5));
+                    setHighScore(prev => score > prev.score ? { score, level } : prev);
+                    return;
+                }
+
+                setCurrentPiece(newPiece);
+                setNextPiece(getRandomPiece());
+                setPosition(startPos);
+            }, [board, checkCollision, nextPiece, score, level]);
+
+            const moveDown = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+
+                const newPos = { ...position, y: position.y + 1 };
+
+                if (checkCollision(currentPiece, newPos, board)) {
+                    const mergedBoard = mergePieceToBoard();
+                    const { newBoard, linesCleared: linesClearedCount } = clearLines(mergedBoard);
+                    setBoard(newBoard);
+                    handleLinesCleared(linesClearedCount);
+                    spawnNewPiece();
+                } else {
+                    setPosition(newPos);
+                }
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp,
+                checkCollision, mergePieceToBoard, clearLines, handleLinesCleared, spawnNewPiece]);
+
+            const moveHorizontal = useCallback((direction) => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return false;
+                const newPos = { ...position, x: position.x + direction };
+                if (!checkCollision(currentPiece, newPos, board)) {
+                    setPosition(newPos);
+                    return true;
+                }
+                return false;
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
+
+
+            const rotatePiece = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+                const rotated = { ...currentPiece, shape: rotate(currentPiece.shape) };
+                if (!checkCollision(rotated, position, board)) {
+                    setCurrentPiece(rotated);
+                }
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
+
+            const rotatePieceCounterClockwise = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+                const rotated = { ...currentPiece, shape: rotateCounterClockwise(currentPiece.shape) };
+                if (!checkCollision(rotated, position, board)) {
+                    setCurrentPiece(rotated);
+                }
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp, checkCollision]);
+
+            const hardDrop = useCallback(() => {
+                if (!currentPiece || gameOver || isPaused || showLevelUp) return;
+
+                let newPos = { ...position };
+                while (!checkCollision(currentPiece, { ...newPos, y: newPos.y + 1 }, board)) {
+                    newPos.y++;
+                }
+
+                const newBoard = board.map(row => [...row]);
+                currentPiece.shape.forEach((row, y) => {
+                    row.forEach((cell, x) => {
+                        if (cell) {
+                            const boardY = newPos.y + y;
+                            const boardX = newPos.x + x;
+                            if (boardY >= 0 && boardY < BOARD_HEIGHT) {
+                                newBoard[boardY][boardX] = currentPiece.color;
+                            }
+                        }
+                    });
+                });
+
+                const { newBoard: clearedBoard, linesCleared: linesClearedCount } = clearLines(newBoard);
+                setBoard(clearedBoard);
+                setScore(prev => prev + linesClearedCount * 100 + 10);
+                setLinesCleared(prev => {
+                    const newTotal = prev + linesClearedCount;
+                    if (newTotal >= 20 && newTotal % 20 < linesClearedCount) {
+                        setShowLevelUp(true);
+                        setIsPaused(true);
+                    }
+                    return newTotal;
+                });
+                spawnNewPiece();
+            }, [currentPiece, position, board, gameOver, isPaused, showLevelUp,
+                checkCollision, clearLines, spawnNewPiece]);
+
+            // 함수 ref 업데이트
+            useEffect(() => { moveHorizontalRef.current = moveHorizontal; }, [moveHorizontal]);
+            useEffect(() => { rotatePieceRef.current = rotatePiece; }, [rotatePiece]);
+            useEffect(() => { rotatePieceCounterClockwiseRef.current = rotatePieceCounterClockwise; }, [rotatePieceCounterClockwise]);
+            useEffect(() => { hardDropRef.current = hardDrop; }, [hardDrop]);
+
+            // 게임 루프
+            useEffect(() => {
+                if (!gameStarted || gameOver || isPaused || showLevelUp) return;
+                const interval = setInterval(moveDown, currentInterval);
+                return () => clearInterval(interval);
+            }, [moveDown, gameOver, isPaused, gameStarted, showLevelUp, currentInterval]);
+
+            // 키보드 이벤트 핸들러
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    const state = gameStateRef.current;
+                    if (!gameStarted || state.gameOver) return;
+
+                    // 이미 누르고 있는 키는 무시
+                    if (keyRepeatRef.current[e.code]) return;
+
+                    switch (e.code) {
+                        case 'ArrowLeft':
+                            e.preventDefault();
+                            moveHorizontalRef.current?.(-1);
+                            keyRepeatRef.current[e.code] = setTimeout(() => {
+                                const piece = currentPieceRef.current;
+                                const brd = boardRef.current;
+                                const st = gameStateRef.current;
+                                if (!piece || st.gameOver || st.isPaused || st.showLevelUp) return;
+                                setPosition(prevPos => {
+                                    let newX = prevPos.x;
+                                    while (newX > 0) {
+                                        const testPos = { ...prevPos, x: newX - 1 };
+                                        let collision = false;
+                                        for (let y = 0; y < piece.shape.length && !collision; y++) {
+                                            for (let x = 0; x < piece.shape[y].length && !collision; x++) {
+                                                if (piece.shape[y][x]) {
+                                                    const newY = testPos.y + y;
+                                                    const newX2 = testPos.x + x;
+                                                    if (newX2 < 0 || newX2 >= BOARD_WIDTH || newY >= BOARD_HEIGHT) collision = true;
+                                                    else if (newY >= 0 && brd[newY][newX2]) collision = true;
+                                                }
+                                            }
+                                        }
+                                        if (collision) break;
+                                        newX--;
+                                    }
+                                    return { ...prevPos, x: newX };
+                                });
+                            }, KEY_REPEAT_DELAY);
+                            break;
+                        case 'ArrowRight':
+                            e.preventDefault();
+                            moveHorizontalRef.current?.(1);
+                            keyRepeatRef.current[e.code] = setTimeout(() => {
+                                const piece = currentPieceRef.current;
+                                const brd = boardRef.current;
+                                const st = gameStateRef.current;
+                                if (!piece || st.gameOver || st.isPaused || st.showLevelUp) return;
+                                setPosition(prevPos => {
+                                    let newX = prevPos.x;
+                                    while (newX < BOARD_WIDTH - 1) {
+                                        const testPos = { ...prevPos, x: newX + 1 };
+                                        let collision = false;
+                                        for (let y = 0; y < piece.shape.length && !collision; y++) {
+                                            for (let x = 0; x < piece.shape[y].length && !collision; x++) {
+                                                if (piece.shape[y][x]) {
+                                                    const newY = testPos.y + y;
+                                                    const newX2 = testPos.x + x;
+                                                    if (newX2 < 0 || newX2 >= BOARD_WIDTH || newY >= BOARD_HEIGHT) collision = true;
+                                                    else if (newY >= 0 && brd[newY][newX2]) collision = true;
+                                                }
+                                            }
+                                        }
+                                        if (collision) break;
+                                        newX++;
+                                    }
+                                    return { ...prevPos, x: newX };
+                                });
+                            }, KEY_REPEAT_DELAY);
+                            break;
+                        case 'ArrowUp':
+                            e.preventDefault();
+                            rotatePieceRef.current?.();
+                            break;
+                        case 'ArrowDown':
+                            e.preventDefault();
+                            rotatePieceCounterClockwiseRef.current?.();
+                            break;
+                        case 'Space':
+                            e.preventDefault();
+                            hardDropRef.current?.();
+                            break;
+                        case 'KeyP':
+                        case 'Escape':
+                            e.preventDefault();
+                            if (!gameStateRef.current.showLevelUp) {
+                                setIsPaused(prev => !prev);
+                            }
+                            break;
+                    }
+                };
+
+                const handleKeyUp = (e) => {
+                    if (keyRepeatRef.current[e.code]) {
+                        clearTimeout(keyRepeatRef.current[e.code]);
+                        delete keyRepeatRef.current[e.code];
+                    }
+                };
+
+                window.addEventListener('keydown', handleKeyDown);
+                window.addEventListener('keyup', handleKeyUp);
+
+                return () => {
+                    window.removeEventListener('keydown', handleKeyDown);
+                    window.removeEventListener('keyup', handleKeyUp);
+                };
+            }, [gameStarted]);
+
+            // 게임 시작/리셋 함수
+            const initializeGame = (initialBoard) => {
+                setBoard(initialBoard);
+                setScore(0);
+                setLinesCleared(0);
+                setLevel(1);
+                setGameOver(false);
+                setGameOverAnimation(false);
+                setIsPaused(false);
+                setShowLevelUp(false);
+                setGameStarted(true);
+                setCurrentInterval(SPEED_OPTIONS[speed].interval);
+
+                const newPiece = getRandomPiece();
+                setCurrentPiece(newPiece);
+                setNextPiece(getRandomPiece());
+                setPosition({
+                    x: Math.floor(BOARD_WIDTH / 2) - Math.floor(newPiece.shape[0].length / 2),
+                    y: 0
+                });
+            };
+
+            const startGame = () => initializeGame(createEmptyBoard());
+            const startRandomGame = () => initializeGame(createRandomBoard());
+
+            const resetGame = () => {
+                setBoard(createEmptyBoard());
+                setCurrentPiece(null);
+                setNextPiece(null);
+                setPosition({ x: 0, y: 0 });
+                setScore(0);
+                setLinesCleared(0);
+                setLevel(1);
+                setGameOver(false);
+                setGameOverAnimation(false);
+                setIsPaused(false);
+                setShowLevelUp(false);
+                setGameStarted(false);
+                setCurrentInterval(SPEED_OPTIONS[speed].interval);
+            };
+
+            const continueGame = () => {
+                setShowLevelUp(false);
+                setIsPaused(false);
+            };
+
+            const increaseSpeed = () => {
+                setCurrentInterval(prev => Math.max(100, Math.round(prev * 0.8)));
+                setLevel(prev => prev + 1);
+                setShowLevelUp(false);
+                setIsPaused(false);
+            };
+
+            // 렌더링
+            const renderBoard = () => {
+                const displayBoard = board.map(row => [...row]);
+                if (currentPiece && !gameOver) {
+                    currentPiece.shape.forEach((row, y) => {
+                        row.forEach((cell, x) => {
+                            if (cell) {
+                                const boardY = position.y + y;
+                                const boardX = position.x + x;
+                                if (boardY >= 0 && boardY < BOARD_HEIGHT && boardX >= 0 && boardX < BOARD_WIDTH) {
+                                    displayBoard[boardY][boardX] = currentPiece.color;
+                                }
+                            }
+                        });
+                    });
+                }
+                return displayBoard;
+            };
+
+            // 스타일 설정
+            const bgGradient = isDaytime
+                ? 'from-yellow-300 via-orange-200 to-yellow-400'
+                : 'from-indigo-900 via-purple-900 to-blue-900';
+            const sandColor1 = isDaytime ? 'from-yellow-600 to-yellow-400' : 'from-gray-700 to-gray-600';
+            const sandColor2 = isDaytime ? 'from-yellow-500 to-yellow-300' : 'from-gray-600 to-gray-500';
+            const sandColor3 = isDaytime ? 'from-orange-600 to-orange-400' : 'from-gray-800 to-gray-700';
+
+            return (
+                <div className={`relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-b ${bgGradient} text-white overflow-hidden`}>
+                    {/* 태양/달 */}
+                    {isDaytime ? (
+                        <div className="absolute top-5 right-10 w-16 h-16 bg-yellow-400 rounded-full opacity-80 shadow-2xl" />
+                    ) : (
+                        <div className="absolute top-5 right-10 w-16 h-16 bg-gray-300 rounded-full opacity-70 shadow-2xl">
+                            <div className="absolute top-1 right-1 w-14 h-14 bg-indigo-900 rounded-full" />
+                        </div>
+                    )}
+
+                    {/* 사막 배경 */}
+                    <div className={`absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t ${sandColor1} rounded-t-full transform scale-x-150`} />
+                    <div className={`absolute bottom-0 left-1/4 right-0 h-32 bg-gradient-to-t ${sandColor2} rounded-t-full transform scale-x-125 opacity-70`} />
+                    <div className={`absolute bottom-0 left-0 right-1/3 h-36 bg-gradient-to-t ${sandColor3} rounded-t-full opacity-60`} />
+
+                    {/* 낙타 애니메이션 */}
+                    <div className="absolute bottom-12 left-0 right-0 h-16 overflow-hidden z-10">
+                        <div className="animate-camel-walk flex gap-32">
+                            {[...Array(6)].map((_, i) => (
+                                <div key={i} className="flex flex-col items-center min-w-max">
+                                    <div className="relative">
+                                        <div className="w-20 h-12 bg-amber-700 rounded-full" />
+                                        <div className="absolute top-0 left-1/3 -translate-x-1/2 -translate-y-2 w-9 h-9 bg-amber-800 rounded-full" />
+                                        <div className="absolute top-0 right-1/3 translate-x-1/2 -translate-y-2 w-9 h-9 bg-amber-800 rounded-full" />
+                                        <div className="absolute -top-3 -left-2 w-3 h-12 bg-amber-700 rounded" />
+                                        <div className="absolute -top-6 -left-4 w-7 h-6 bg-amber-700 rounded-lg" />
+                                        <div className="absolute -top-7 -left-5 w-2 h-3 bg-amber-800 rounded-full" />
+                                        <div className="absolute -top-7 -left-2 w-2 h-3 bg-amber-800 rounded-full" />
+                                        <div className="absolute top-1 right-0 w-2 h-8 bg-amber-800 rounded" />
+                                        <div className="absolute bottom-0 left-3 w-2 h-8 bg-amber-900" />
+                                        <div className="absolute bottom-0 left-8 w-2 h-8 bg-amber-900" />
+                                        <div className="absolute bottom-0 right-8 w-2 h-8 bg-amber-900" />
+                                        <div className="absolute bottom-0 right-3 w-2 h-8 bg-amber-900" />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* 게임 영역 */}
+                    <div className="relative z-10 flex flex-col items-center">
+                        <h1 className="game-title text-4xl font-bold mb-4 text-amber-900 drop-shadow-lg text-center">
+                            동옥의 AI TETRIS
+                        </h1>
+
+                        {/* 게임 시작 전 메뉴 */}
+                        {!gameStarted && (
+                            <div className="flex flex-col items-center gap-4 px-4">
+                                <div className="flex gap-2">
+                                    {Object.entries(SPEED_OPTIONS).map(([key, { label }]) => (
+                                        <button
+                                            key={key}
+                                            onClick={() => setSpeed(key)}
+                                            className={`px-4 py-2 rounded-lg font-semibold text-sm ${
+                                                speed === key ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'
+                                            }`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={startGame} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-lg font-semibold">
+                                        게임 시작
+                                    </button>
+                                    <button onClick={startRandomGame} className="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg text-lg font-semibold">
+                                        랜덤 시작
+                                    </button>
+                                    <button onClick={toggleFullscreen} className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-semibold">
+                                        {isFullscreen ? '전체화면 해제' : '전체화면'}
+                                    </button>
+                                </div>
+                                <div className="mt-4 bg-gray-800 bg-opacity-80 p-4 rounded-lg text-center">
+                                    <div className="text-yellow-400 font-bold mb-2">조작법</div>
+                                    <div className="text-sm space-y-1">
+                                        <div><span className="key-hint">←</span> <span className="key-hint">→</span> 좌우 이동</div>
+                                        <div><span className="key-hint">↑</span> 회전</div>
+                                        <div><span className="key-hint">↓</span> 반대회전</div>
+                                        <div><span className="key-hint">Space</span> 즉시 낙하</div>
+                                        <div><span className="key-hint">P</span> / <span className="key-hint">Esc</span> 일시정지</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 게임 플레이 화면 */}
+                        {gameStarted && (
+                            <div className="flex gap-6 items-start">
+                                {/* 왼쪽 패널 */}
+                                <div className="flex flex-col gap-3 w-32">
+                                    {/* 다음 블록 미리보기 */}
+                                    {nextPiece && (
+                                        <div className="flex flex-col items-center">
+                                            <div className="text-sm font-semibold text-amber-900 mb-1">NEXT</div>
+                                            <div
+                                                className="border-2 border-gray-700 bg-gray-800 p-2 rounded-lg"
+                                                style={{ display: 'grid', gridTemplateColumns: `repeat(4, ${CELL_SIZE}px)`, gap: '2px' }}
+                                            >
+                                                {Array.from({ length: 4 }).map((_, y) =>
+                                                    Array.from({ length: 4 }).map((_, x) => {
+                                                        const pieceY = y - Math.floor((4 - nextPiece.shape.length) / 2);
+                                                        const pieceX = x - Math.floor((4 - nextPiece.shape[0].length) / 2);
+                                                        const isActive = pieceY >= 0 && pieceY < nextPiece.shape.length &&
+                                                                       pieceX >= 0 && pieceX < nextPiece.shape[0].length &&
+                                                                       nextPiece.shape[pieceY][pieceX];
+                                                        return (
+                                                            <div
+                                                                key={`${y}-${x}`}
+                                                                className={`${isActive ? nextPiece.color : 'bg-gray-900'} rounded`}
+                                                                style={{ width: CELL_SIZE, height: CELL_SIZE }}
+                                                            />
+                                                        );
+                                                    })
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* 점수 */}
+                                    <div className="flex flex-col items-center bg-gray-800 bg-opacity-80 p-3 rounded-lg">
+                                        <div className="text-sm font-semibold text-yellow-400">SCORE</div>
+                                        <div className="text-xl font-bold text-white">{formatScore(score)}</div>
+                                    </div>
+
+                                    {/* 레벨 */}
+                                    <div className="flex flex-col items-center bg-gray-800 bg-opacity-80 p-3 rounded-lg">
+                                        <div className="text-sm font-semibold text-yellow-400">LEVEL</div>
+                                        <div className="text-xl font-bold text-white">{level}</div>
+                                    </div>
+
+                                    {/* 줄 */}
+                                    <div className="flex flex-col items-center bg-gray-800 bg-opacity-80 p-3 rounded-lg">
+                                        <div className="text-sm font-semibold text-yellow-400">LINES</div>
+                                        <div className="text-xl font-bold text-white">{linesCleared}</div>
+                                    </div>
+
+                                    {/* 최고 기록 */}
+                                    {highScore.score > 0 && (
+                                        <div className="flex flex-col items-center bg-gradient-to-r from-yellow-600 to-orange-600 p-3 rounded-lg">
+                                            <div className="text-xs font-semibold text-white">최고기록</div>
+                                            <div className="text-sm font-bold text-white">
+                                                Lv.{highScore.level} : {formatScore(highScore.score)}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 게임 보드 */}
+                                <div className="relative">
+                                    <div
+                                        className="border-4 border-gray-700 bg-gray-800 rounded-lg"
+                                        style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: `repeat(${BOARD_WIDTH}, ${CELL_SIZE}px)`,
+                                            gap: '2px',
+                                            padding: '4px'
+                                        }}
+                                    >
+                                        {renderBoard().map((row, y) =>
+                                            row.map((cell, x) => (
+                                                <div
+                                                    key={`${y}-${x}`}
+                                                    className={`${cell || 'bg-gray-900'} ${gameOverAnimation ? 'block-fall' : ''} rounded-sm`}
+                                                    style={{
+                                                        width: CELL_SIZE,
+                                                        height: CELL_SIZE,
+                                                        animationDelay: gameOverAnimation ? `${y * 0.05}s` : '0s'
+                                                    }}
+                                                />
+                                            ))
+                                        )}
+                                    </div>
+
+                                    {/* 일시정지 오버레이 */}
+                                    {isPaused && !showLevelUp && !gameOver && (
+                                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 rounded-lg">
+                                            <div className="text-3xl font-bold text-yellow-400">PAUSED</div>
+                                        </div>
+                                    )}
+
+                                    {/* 레벨업 팝업 */}
+                                    {showLevelUp && (
+                                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70 rounded-lg">
+                                            <div className="bg-orange-800 border-2 border-yellow-500 rounded-lg p-6 shadow-2xl">
+                                                <div className="text-2xl text-yellow-300 mb-4 font-bold text-center">20줄 달성!</div>
+                                                <div className="text-base mb-4 text-center">레벨을 올리시겠습니까?</div>
+                                                <div className="flex gap-3 justify-center">
+                                                    <button onClick={continueGame} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold">
+                                                        같은 속도
+                                                    </button>
+                                                    <button onClick={increaseSpeed} className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold">
+                                                        레벨 {level + 1}로 ↑
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* 게임 오버 오버레이 */}
+                                    {gameOver && (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black bg-opacity-50 rounded-lg">
+                                            <div className="text-4xl font-bold text-red-600 bg-black bg-opacity-70 px-6 py-4 rounded-lg">
+                                                GAME OVER
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <button onClick={startGame} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold">
+                                                    다시 시작
+                                                </button>
+                                                <button onClick={startRandomGame} className="px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg font-bold">
+                                                    랜덤 시작
+                                                </button>
+                                                <button onClick={resetGame} className="px-6 py-3 bg-gray-600 hover:bg-gray-700 rounded-lg font-bold">
+                                                    메인으로
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 오른쪽 패널 - 조작법 */}
+                                <div className="flex flex-col gap-3 w-32">
+                                    <div className="bg-gray-800 bg-opacity-80 p-3 rounded-lg text-center">
+                                        <div className="text-sm font-semibold text-yellow-400 mb-2">조작법</div>
+                                        <div className="text-xs space-y-1">
+                                            <div><span className="key-hint">←→</span> 이동</div>
+                                            <div><span className="key-hint">↑</span> 회전</div>
+                                            <div><span className="key-hint">↓</span> 반대회전</div>
+                                            <div><span className="key-hint">Space</span> 드롭</div>
+                                            <div><span className="key-hint">P</span> 정지</div>
+                                        </div>
+                                    </div>
+
+                                    {/* 점수 기록 */}
+                                    {scoreHistory.length > 0 && (
+                                        <div className="flex flex-col items-center bg-gray-800 bg-opacity-90 p-3 rounded-lg">
+                                            <div className="text-xs font-semibold text-gray-400 mb-1">기록</div>
+                                            {scoreHistory.map((record, index) => (
+                                                <div key={index} className="text-xs text-white">
+                                                    Lv.{record.level} : {formatScore(record.score)}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <button onClick={toggleFullscreen} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs font-semibold">
+                                        {isFullscreen ? '전체화면 해제' : '전체화면'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 푸터 */}
+                    <div className="absolute bottom-2 right-2 text-xs text-amber-900 bg-yellow-100 bg-opacity-70 px-2 py-0.5 rounded z-10 text-right leading-tight pointer-events-none">
+                        <div>이동옥 2026.01.12</div>
+                        <div className="text-xs">with claude.ai</div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<Tetris />, document.getElementById('root'));
+    </script>
+</body>
+</html>
