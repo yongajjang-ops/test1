@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
-    <title>동옥의 AI TETRIS</title>
+    <title>신나는 TETRIS</title>
     <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -45,6 +45,133 @@
 
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
+
+        // 테트리스 음악 (코로벨니키) - Web Audio API
+        const createTetrisMusic = () => {
+            let audioContext = null;
+            let isPlaying = false;
+            let currentNoteIndex = 0;
+            let scheduledTime = 0;
+            let timerID = null;
+
+            // 음계 주파수
+            const notes = {
+                'C4': 261.63, 'D4': 293.66, 'E4': 329.63, 'F4': 349.23,
+                'G4': 392.00, 'A4': 440.00, 'B4': 493.88,
+                'C5': 523.25, 'D5': 587.33, 'E5': 659.25, 'F5': 698.46,
+                'G5': 783.99, 'A5': 880.00, 'B5': 987.77,
+                'REST': 0
+            };
+
+            // 코로벨니키 멜로디 (음표, 박자)
+            const melody = [
+                ['E5', 1], ['B4', 0.5], ['C5', 0.5], ['D5', 1], ['C5', 0.5], ['B4', 0.5],
+                ['A4', 1], ['A4', 0.5], ['C5', 0.5], ['E5', 1], ['D5', 0.5], ['C5', 0.5],
+                ['B4', 1], ['B4', 0.5], ['C5', 0.5], ['D5', 1], ['E5', 1],
+                ['C5', 1], ['A4', 1], ['A4', 1], ['REST', 0.5],
+
+                ['D5', 1], ['F5', 0.5], ['A5', 1], ['G5', 0.5], ['F5', 0.5],
+                ['E5', 1.5], ['C5', 0.5], ['E5', 1], ['D5', 0.5], ['C5', 0.5],
+                ['B4', 1], ['B4', 0.5], ['C5', 0.5], ['D5', 1], ['E5', 1],
+                ['C5', 1], ['A4', 1], ['A4', 1], ['REST', 0.5],
+
+                ['E5', 2], ['C5', 2], ['D5', 2], ['B4', 2],
+                ['C5', 2], ['A4', 2], ['G4', 2], ['B4', 1], ['REST', 0.5],
+                ['E5', 2], ['C5', 2], ['D5', 2], ['B4', 2],
+                ['C5', 1], ['E5', 1], ['A5', 2], ['G5', 2], ['REST', 0.5]
+            ];
+
+            const tempo = 140; // BPM
+            const beatDuration = 60 / tempo;
+
+            const init = () => {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                return audioContext;
+            };
+
+            const playNote = (frequency, startTime, duration, volume = 0.15) => {
+                if (!audioContext || frequency === 0) return;
+
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(frequency, startTime);
+
+                gainNode.gain.setValueAtTime(volume, startTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration * 0.9);
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                oscillator.start(startTime);
+                oscillator.stop(startTime + duration);
+            };
+
+            const scheduleNotes = () => {
+                if (!isPlaying || !audioContext) return;
+
+                const scheduleAhead = 0.1;
+
+                while (scheduledTime < audioContext.currentTime + scheduleAhead) {
+                    const [note, beats] = melody[currentNoteIndex];
+                    const duration = beats * beatDuration;
+                    const frequency = notes[note];
+
+                    if (frequency > 0) {
+                        playNote(frequency, scheduledTime, duration * 0.8);
+                    }
+
+                    scheduledTime += duration;
+                    currentNoteIndex = (currentNoteIndex + 1) % melody.length;
+                }
+
+                timerID = setTimeout(scheduleNotes, 50);
+            };
+
+            const start = () => {
+                if (isPlaying) return;
+                init();
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                isPlaying = true;
+                scheduledTime = audioContext.currentTime;
+                scheduleNotes();
+            };
+
+            const stop = () => {
+                isPlaying = false;
+                if (timerID) {
+                    clearTimeout(timerID);
+                    timerID = null;
+                }
+                currentNoteIndex = 0;
+            };
+
+            const pause = () => {
+                isPlaying = false;
+                if (timerID) {
+                    clearTimeout(timerID);
+                    timerID = null;
+                }
+            };
+
+            const resume = () => {
+                if (isPlaying) return;
+                if (!audioContext) init();
+                isPlaying = true;
+                scheduledTime = audioContext.currentTime;
+                scheduleNotes();
+            };
+
+            return { start, stop, pause, resume, init };
+        };
+
+        // 전역 음악 인스턴스
+        const tetrisMusic = createTetrisMusic();
 
         // 게임 상수
         const BOARD_WIDTH = 10;
@@ -151,6 +278,7 @@
             const [isFullscreen, setIsFullscreen] = useState(false);
             const [isMoving, setIsMoving] = useState(false);
             const [moveDirection, setMoveDirection] = useState(0);
+            const [isMuted, setIsMuted] = useState(false);
 
             const currentHour = new Date().getHours();
             const isDaytime = currentHour >= 6 && currentHour < 18;
@@ -179,6 +307,34 @@
                 document.addEventListener('fullscreenchange', handleFullscreenChange);
                 return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
             }, []);
+
+            // 음악 제어
+            useEffect(() => {
+                if (isMuted) {
+                    tetrisMusic.pause();
+                    return;
+                }
+
+                if (gameStarted && !gameOver) {
+                    if (isPaused || showLevelUp) {
+                        tetrisMusic.pause();
+                    } else {
+                        tetrisMusic.resume();
+                    }
+                } else if (gameOver) {
+                    tetrisMusic.stop();
+                } else {
+                    tetrisMusic.stop();
+                }
+
+                return () => {
+                    tetrisMusic.stop();
+                };
+            }, [gameStarted, gameOver, isPaused, showLevelUp, isMuted]);
+
+            const toggleMute = () => {
+                setIsMuted(prev => !prev);
+            };
 
             // 게임 로직
             const checkCollision = useCallback((piece, pos, currentBoard) => {
@@ -354,6 +510,11 @@
                     x: Math.floor(BOARD_WIDTH / 2) - Math.floor(newPiece.shape[0].length / 2),
                     y: 0
                 });
+
+                // 음악 시작
+                if (!isMuted) {
+                    tetrisMusic.start();
+                }
             };
 
             const startGame = () => initializeGame(createEmptyBoard());
@@ -490,7 +651,7 @@
                     {/* 게임 영역 */}
                     <div className="relative z-10 w-full flex flex-col items-center pt-2">
                         <h1 className="game-title text-3xl font-bold mb-2 text-amber-900 drop-shadow-lg text-center">
-                            동옥의 AI TETRIS
+                            신나는 TETRIS
                         </h1>
 
                         {/* 게임 시작 전 메뉴 */}
@@ -516,8 +677,13 @@
                                     <button onClick={startRandomGame} className="px-4 py-2 bg-purple-600 active:bg-purple-700 rounded-lg text-base font-semibold">
                                         🎲 랜덤
                                     </button>
-                                    <button onClick={toggleFullscreen} className="px-3 py-2 bg-gray-700 active:bg-gray-600 rounded-lg text-base font-semibold">
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={toggleFullscreen} className="px-3 py-2 bg-gray-700 active:bg-gray-600 rounded-lg text-sm font-semibold">
                                         {isFullscreen ? '전체화면 해제' : '전체화면'}
+                                    </button>
+                                    <button onClick={toggleMute} className={`px-3 py-2 rounded-lg text-sm font-semibold ${isMuted ? 'bg-red-600 active:bg-red-700' : 'bg-green-600 active:bg-green-700'}`}>
+                                        {isMuted ? '음악 OFF' : '음악 ON'}
                                     </button>
                                 </div>
                             </div>
@@ -526,12 +692,14 @@
                         {/* 게임 플레이 화면 */}
                         {gameStarted && (
                             <>
-                                <div className="mb-2 flex gap-4 items-center text-base">
+                                <div className="mb-2 flex gap-2 items-center text-base flex-wrap justify-center">
                                     <div className="text-amber-900 font-bold drop-shadow">점수: {formatScore(score)}</div>
                                     <div className="text-orange-800 font-bold drop-shadow">줄: {linesCleared}</div>
-                                    <button onClick={toggleFullscreen} className="px-2 py-1 bg-gray-700 active:bg-gray-600 text-white rounded text-xs font-semibold flex items-center gap-1">
+                                    <button onClick={toggleFullscreen} className="px-2 py-1 bg-gray-700 active:bg-gray-600 text-white rounded text-xs font-semibold">
                                         {isFullscreen ? '🔽' : '🔼'}
-                                        <span className="text-xs">전체화면</span>
+                                    </button>
+                                    <button onClick={toggleMute} className={`px-2 py-1 rounded text-xs font-semibold ${isMuted ? 'bg-red-600 active:bg-red-700' : 'bg-green-600 active:bg-green-700'}`}>
+                                        {isMuted ? '🔇' : '🔊'}
                                     </button>
                                 </div>
 
@@ -589,13 +757,15 @@
 
                                         {/* 점수 기록 */}
                                         {scoreHistory.length > 0 && (
-                                            <div className="flex flex-col items-center bg-gray-800 bg-opacity-90 p-2 rounded-lg">
-                                                <div className="text-xs font-semibold text-gray-400 mb-1">기록</div>
-                                                {scoreHistory.map((record, index) => (
-                                                    <div key={index} className="text-xs text-white">
-                                                        Lv.{record.level} : {formatScore(record.score)}
-                                                    </div>
-                                                ))}
+                                            <div className="flex flex-col items-center">
+                                                <div className="text-xs font-semibold text-amber-900 mb-1">Score Board</div>
+                                                <div className="bg-gray-800 bg-opacity-90 p-2 rounded-lg w-full">
+                                                    {scoreHistory.map((record, index) => (
+                                                        <div key={index} className="text-xs text-white">
+                                                            Lv.{record.level} : {formatScore(record.score)}
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
 
